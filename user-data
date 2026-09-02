@@ -1,0 +1,121 @@
+#cloud-config
+#
+# Ubuntu 24.04 LTS store mini-PC autoinstall template.
+#
+# IMPORTANT:
+# - This performs an unattended install and wipes the target disk.
+# - Replace CHANGE_ME_* values before using.
+# - The password must be a Linux password hash, not plain text.
+#   Generate one on Linux with:
+#     openssl passwd -6
+#   or:
+#     sudo apt install -y whois && mkpasswd --method=SHA-512
+#
+# Replace CHANGE_ME_PUBLIC_BASE_URL with the public folder URL that contains
+# user-data, meta-data, and scripts/. Example:
+# https://raw.githubusercontent.com/YOUR_USER/YOUR_REPO/main/public_autoinstall
+
+autoinstall:
+  version: 1
+
+  locale: en_US.UTF-8
+  timezone: Africa/Casablanca
+
+  keyboard:
+    layout: us
+
+  network:
+    network:
+      version: 2
+      ethernets:
+        all-ethernet:
+          match:
+            name: "en*"
+          dhcp4: true
+          optional: true
+
+  apt:
+    preserve_sources_list: false
+    primary:
+      - arches: [default]
+        uri: http://archive.ubuntu.com/ubuntu
+
+  storage:
+    layout:
+      name: direct
+
+  identity:
+    hostname: computer
+    username: store
+    realname: Store Counter
+    password: "CHANGE_ME_PASSWORD_HASH"
+
+  ssh:
+    install-server: true
+    allow-pw: true
+
+  packages:
+    - ubuntu-desktop
+    - openssh-server
+    - python3
+    - python3-venv
+    - python3-pip
+    - curl
+    - git
+    - ffmpeg
+    - vlc
+    - net-tools
+    - htop
+    - unzip
+    - libgl1
+    - libglib2.0-0
+
+  user-data:
+    package_update: true
+    package_upgrade: false
+    disable_root: true
+
+  late-commands:
+    - curtin in-target -- systemctl enable ssh
+    - curtin in-target -- systemctl disable unattended-upgrades || true
+    - curtin in-target -- systemctl mask sleep.target suspend.target hibernate.target hybrid-sleep.target || true
+    - curtin in-target -- mkdir -p /etc/gdm3
+    - |
+      cat > /target/etc/gdm3/custom.conf <<'EOF'
+      [daemon]
+      AutomaticLoginEnable=True
+      AutomaticLogin=store
+
+      [security]
+
+      [xdmcp]
+
+      [chooser]
+
+      [debug]
+      EOF
+    - curtin in-target -- mkdir -p /home/store/store_counter_system
+    - curtin in-target -- chown -R store:store /home/store/store_counter_system
+    - |
+      PUBLIC_BASE_URL="CHANGE_ME_PUBLIC_BASE_URL"
+      if [ "$PUBLIC_BASE_URL" != "CHANGE_ME_PUBLIC_BASE_URL" ]; then
+        for script in SETUP_FIRST_RUN.sh DOWNLOAD_YOLOX_TINY_OPENVINO.sh START_WITH_WEB_UI.sh START_STORE_COUNTER.sh START_WITH_TWO_CAMERAS.sh; do
+          curl -fsSL "$PUBLIC_BASE_URL/scripts/$script" -o "/target/home/store/store_counter_system/$script"
+        done
+        chmod +x /target/home/store/store_counter_system/*.sh
+        chown -R store:store /target/home/store/store_counter_system
+      fi
+    - |
+      cat > /target/home/store/first_boot_store_counter_setup.sh <<'EOF'
+      #!/usr/bin/env bash
+      set -euo pipefail
+      cd /home/store/store_counter_system
+      chmod +x *.sh
+      ./SETUP_FIRST_RUN.sh
+      ./DOWNLOAD_YOLOX_TINY_OPENVINO.sh
+      echo "Setup finished. Test with: ./START_WITH_WEB_UI.sh"
+      EOF
+    - curtin in-target -- chmod +x /home/store/first_boot_store_counter_setup.sh
+    - curtin in-target -- chown store:store /home/store/first_boot_store_counter_setup.sh
+
+  shutdown: reboot
