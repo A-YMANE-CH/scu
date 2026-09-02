@@ -99,13 +99,14 @@ autoinstall:
     - curtin in-target -- mkdir -p /home/store/store_counter_system
     - curtin in-target -- chown -R store:store /home/store/store_counter_system
     - |
+      set -e
       PUBLIC_BASE_URL="https://raw.githubusercontent.com/A-YMANE-CH/scu/main"
       if [ "$PUBLIC_BASE_URL" != "CHANGE_ME_PUBLIC_BASE_URL" ]; then
         for script in SETUP_FIRST_RUN.sh DOWNLOAD_YOLOX_TINY_OPENVINO.sh START_WITH_WEB_UI.sh START_STORE_COUNTER.sh START_WITH_TWO_CAMERAS.sh; do
-          curl -fsSL "$PUBLIC_BASE_URL/scripts/$script" -o "/target/home/store/store_counter_system/$script"
+          curtin in-target -- curl -fsSL "$PUBLIC_BASE_URL/scripts/$script" -o "/home/store/store_counter_system/$script"
         done
-        chmod +x /target/home/store/store_counter_system/*.sh
-        chown -R store:store /target/home/store/store_counter_system
+        curtin in-target -- chmod +x /home/store/store_counter_system/SETUP_FIRST_RUN.sh /home/store/store_counter_system/DOWNLOAD_YOLOX_TINY_OPENVINO.sh /home/store/store_counter_system/START_WITH_WEB_UI.sh /home/store/store_counter_system/START_STORE_COUNTER.sh /home/store/store_counter_system/START_WITH_TWO_CAMERAS.sh
+        curtin in-target -- chown -R store:store /home/store/store_counter_system
       fi
     - |
       curl -fsSL "https://download.teamviewer.com/download/linux/teamviewer_amd64.deb" -o /target/tmp/teamviewer_amd64.deb
