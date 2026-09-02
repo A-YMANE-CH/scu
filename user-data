@@ -33,11 +33,17 @@ autoinstall:
         dhcp4: true
         optional: true
 
+  refresh-installer:
+    update: false
+
   apt:
     preserve_sources_list: false
-    primary:
-      - arches: [default]
-        uri: http://archive.ubuntu.com/ubuntu
+    geoip: false
+    fallback: offline-install
+    mirror-selection:
+      primary:
+        - uri: http://archive.ubuntu.com/ubuntu
+          arches: [amd64]
 
   storage:
     layout:
@@ -69,11 +75,6 @@ autoinstall:
     - libgl1
     - libglib2.0-0
     - libminizip1
-
-  user-data:
-    package_update: true
-    package_upgrade: false
-    disable_root: true
 
   late-commands:
     - curtin in-target -- systemctl enable ssh
