@@ -97,7 +97,7 @@ autoinstall:
     - curtin in-target -- mkdir -p /home/store/store_counter_system
     - curtin in-target -- chown -R store:store /home/store/store_counter_system
     - |
-      PUBLIC_BASE_URL="CHANGE_ME_PUBLIC_BASE_URL"
+      PUBLIC_BASE_URL="https://raw.githubusercontent.com/A-YMANE-CH/store-counter-autoinstall/main"
       if [ "$PUBLIC_BASE_URL" != "CHANGE_ME_PUBLIC_BASE_URL" ]; then
         for script in SETUP_FIRST_RUN.sh DOWNLOAD_YOLOX_TINY_OPENVINO.sh START_WITH_WEB_UI.sh START_STORE_COUNTER.sh START_WITH_TWO_CAMERAS.sh; do
           curl -fsSL "$PUBLIC_BASE_URL/scripts/$script" -o "/target/home/store/store_counter_system/$script"
