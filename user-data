@@ -48,7 +48,7 @@ autoinstall:
     hostname: computer
     username: store
     realname: Store Counter
-    password: "CHANGE_ME_PASSWORD_HASH"
+    password: "$6$GCJ8afvpK731cClT$B9vysXPEkK8m1BbsrmEgAj/Tm5UdrPjLerWEcWomp9u4xltIQfRZvE392E5AWODLb.CwMezrSY0DWTovvvyJM/"
 
   ssh:
     install-server: true
