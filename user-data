@@ -25,14 +25,13 @@ autoinstall:
     layout: us
 
   network:
-    network:
-      version: 2
-      ethernets:
-        all-ethernet:
-          match:
-            name: "en*"
-          dhcp4: true
-          optional: true
+    version: 2
+    ethernets:
+      all-ethernet:
+        match:
+          name: "en*"
+        dhcp4: true
+        optional: true
 
   apt:
     preserve_sources_list: false
@@ -109,10 +108,6 @@ autoinstall:
         curtin in-target -- chown -R store:store /home/store/store_counter_system
       fi
     - |
-      curl -fsSL "https://download.teamviewer.com/download/linux/teamviewer_amd64.deb" -o /target/tmp/teamviewer_amd64.deb
-      curtin in-target -- apt-get install -y /tmp/teamviewer_amd64.deb || true
-      curtin in-target -- systemctl enable teamviewerd || true
-    - |
       cat > /target/home/store/first_boot_store_counter_setup.sh <<'EOF'
       #!/usr/bin/env bash
       set -euo pipefail
@@ -120,6 +115,9 @@ autoinstall:
       chmod +x *.sh
       ./SETUP_FIRST_RUN.sh
       ./DOWNLOAD_YOLOX_TINY_OPENVINO.sh
+      curl -fsSL "https://download.teamviewer.com/download/linux/teamviewer_amd64.deb" -o /tmp/teamviewer_amd64.deb
+      sudo apt-get install -y /tmp/teamviewer_amd64.deb || true
+      sudo systemctl enable --now teamviewerd || true
       echo "Setup finished. Test with: ./START_WITH_WEB_UI.sh"
       EOF
     - curtin in-target -- chmod +x /home/store/first_boot_store_counter_setup.sh
