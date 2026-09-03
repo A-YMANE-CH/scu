@@ -1,0 +1,20 @@
+[Unit]
+Description=Store entrance counter
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=STORE_USER
+WorkingDirectory=/home/STORE_USER/store_counter_system
+ExecStart=/home/STORE_USER/store_counter_system/START_STORE_COUNTER.sh
+Restart=always
+RestartSec=10
+Environment=PYTHONUNBUFFERED=1
+Environment=OMP_NUM_THREADS=4
+Environment=MKL_NUM_THREADS=4
+Environment=OPENBLAS_NUM_THREADS=4
+Environment=NUMEXPR_NUM_THREADS=4
+
+[Install]
+WantedBy=multi-user.target

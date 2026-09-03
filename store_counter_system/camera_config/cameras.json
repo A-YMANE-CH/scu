@@ -1,0 +1,12 @@
+{
+  "scene_id": "store_scene",
+  "cameras": [
+    {
+      "camera_id": "cam_501",
+      "name": "Entrance camera",
+      "source": "rtsp://USERNAME:PASSWORD@DVR_IP:554/Streaming/Channels/1502",
+      "fps": 25.0,
+      "sync_offset_ms": 0
+    }
+  ]
+}

@@ -1,20 +1,4 @@
 #cloud-config
-#
-# Ubuntu 24.04 LTS store mini-PC autoinstall template.
-#
-# IMPORTANT:
-# - This performs an unattended install and wipes the target disk.
-# - Replace CHANGE_ME_* values before using.
-# - The password must be a Linux password hash, not plain text.
-#   Generate one on Linux with:
-#     openssl passwd -6
-#   or:
-#     sudo apt install -y whois && mkpasswd --method=SHA-512
-#
-# Replace CHANGE_ME_PUBLIC_BASE_URL with the public folder URL that contains
-# user-data, meta-data, and scripts/. Example:
-# https://raw.githubusercontent.com/YOUR_USER/YOUR_REPO/main/public_autoinstall
-
 autoinstall:
   version: 1
 
@@ -67,6 +51,7 @@ autoinstall:
     - python3-pip
     - curl
     - git
+    - wget
     - ffmpeg
     - vlc
     - net-tools
@@ -100,28 +85,64 @@ autoinstall:
     - curtin in-target -- chown -R store:store /home/store/store_counter_system
     - |
       set -e
-      PUBLIC_BASE_URL="https://raw.githubusercontent.com/A-YMANE-CH/scu/main"
-      if [ "$PUBLIC_BASE_URL" != "CHANGE_ME_PUBLIC_BASE_URL" ]; then
-        for script in SETUP_FIRST_RUN.sh DOWNLOAD_YOLOX_TINY_OPENVINO.sh START_WITH_WEB_UI.sh START_STORE_COUNTER.sh START_WITH_TWO_CAMERAS.sh; do
-          curtin in-target -- curl -fsSL "$PUBLIC_BASE_URL/scripts/$script" -o "/home/store/store_counter_system/$script"
-        done
-        curtin in-target -- chmod +x /home/store/store_counter_system/SETUP_FIRST_RUN.sh /home/store/store_counter_system/DOWNLOAD_YOLOX_TINY_OPENVINO.sh /home/store/store_counter_system/START_WITH_WEB_UI.sh /home/store/store_counter_system/START_STORE_COUNTER.sh /home/store/store_counter_system/START_WITH_TWO_CAMERAS.sh
-        curtin in-target -- chown -R store:store /home/store/store_counter_system
-      fi
+      curtin in-target -- rm -rf /tmp/scu
+      curtin in-target -- git clone --depth 1 https://github.com/A-YMANE-CH/scu.git /tmp/scu
+      cp -a /target/tmp/scu/store_counter_system/. /target/home/store/store_counter_system/
+      chmod +x /target/home/store/store_counter_system/*.sh
+      curtin in-target -- chown -R store:store /home/store/store_counter_system
     - |
-      cat > /target/home/store/first_boot_store_counter_setup.sh <<'EOF'
+      cat > /target/usr/local/sbin/store-counter-first-boot.sh <<'EOF'
       #!/usr/bin/env bash
-      set -euo pipefail
+      set -u
+      LOG=/var/log/store-counter-first-boot.log
+      exec > >(tee -a "$LOG") 2>&1
+      echo "Store counter first boot setup started at $(date -Is)"
+
+      if [ -f /var/lib/store-counter-first-boot.done ]; then
+        echo "Setup already completed."
+        exit 0
+      fi
+
+      apt-get update || true
+
+      if ! command -v teamviewer >/dev/null 2>&1; then
+        echo "Installing TeamViewer..."
+        if command -v curl >/dev/null 2>&1; then
+          curl -fsSL "https://download.teamviewer.com/download/linux/teamviewer_amd64.deb" -o /tmp/teamviewer_amd64.deb
+        else
+          wget -O /tmp/teamviewer_amd64.deb "https://download.teamviewer.com/download/linux/teamviewer_amd64.deb"
+        fi
+        apt-get install -y /tmp/teamviewer_amd64.deb || true
+      fi
+      systemctl enable --now teamviewerd || true
+
       cd /home/store/store_counter_system
       chmod +x *.sh
-      ./SETUP_FIRST_RUN.sh
-      ./DOWNLOAD_YOLOX_TINY_OPENVINO.sh
-      curl -fsSL "https://download.teamviewer.com/download/linux/teamviewer_amd64.deb" -o /tmp/teamviewer_amd64.deb
-      sudo apt-get install -y /tmp/teamviewer_amd64.deb || true
-      sudo systemctl enable --now teamviewerd || true
-      echo "Setup finished. Test with: ./START_WITH_WEB_UI.sh"
+      chown -R store:store /home/store/store_counter_system
+
+      runuser -l store -c 'cd /home/store/store_counter_system && ./SETUP_FIRST_RUN.sh'
+      runuser -l store -c 'cd /home/store/store_counter_system && ./DOWNLOAD_YOLOX_TINY_OPENVINO.sh'
+
+      touch /var/lib/store-counter-first-boot.done
+      systemctl disable store-counter-first-boot.service || true
+      echo "Store counter first boot setup finished at $(date -Is)"
       EOF
-    - curtin in-target -- chmod +x /home/store/first_boot_store_counter_setup.sh
-    - curtin in-target -- chown store:store /home/store/first_boot_store_counter_setup.sh
+    - curtin in-target -- chmod +x /usr/local/sbin/store-counter-first-boot.sh
+    - |
+      cat > /target/etc/systemd/system/store-counter-first-boot.service <<'EOF'
+      [Unit]
+      Description=Store counter first boot setup
+      Wants=network-online.target
+      After=network-online.target
+
+      [Service]
+      Type=oneshot
+      ExecStart=/usr/local/sbin/store-counter-first-boot.sh
+      RemainAfterExit=yes
+
+      [Install]
+      WantedBy=multi-user.target
+      EOF
+    - curtin in-target -- systemctl enable store-counter-first-boot.service
 
   shutdown: reboot

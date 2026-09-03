@@ -1,23 +1,28 @@
-# Public Ubuntu autoinstall bundle
+# Public Ubuntu Autoinstall Bundle
 
-Host this folder from a public HTTPS location for Ubuntu autoinstall.
+This repository contains the public installer bundle for store mini PCs.
 
-Required files:
-
-- `user-data`: Ubuntu autoinstall cloud-init file.
-- `meta-data`: NoCloud metadata file.
-- `scripts/`: store counter setup and launch scripts.
-
-Example installer URL:
+Use this direct URL in the Ubuntu Desktop autoinstall URL field:
 
 ```text
-autoinstall ds=nocloud-net;s=https://raw.githubusercontent.com/YOUR_USER/YOUR_REPO/main/public_autoinstall/
+https://raw.githubusercontent.com/A-YMANE-CH/scu/main/autoinstall.yaml
 ```
 
-Important:
+The installer creates the `store` user, downloads the sanitized application code
+into `/home/store/store_counter_system`, installs first-boot setup logic, and
+reboots.
 
-- The URL must end with `/`.
-- The installer will download `user-data` and `meta-data` from that folder.
-- Do not publish a real reusable password. Use a temporary password hash and
-  change the password after installation, or use SSH keys and disable password
-  login later.
+On first boot, `store-counter-first-boot.service` runs once. It installs
+TeamViewer, creates the Python runtime, and downloads the YOLOX-Tiny OpenVINO
+model. Logs are written to:
+
+```text
+/var/log/store-counter-first-boot.log
+```
+
+Real DVR/camera credentials are intentionally not stored here. After installation,
+edit:
+
+```text
+/home/store/store_counter_system/camera_config/cameras.json
+```
