@@ -74,8 +74,23 @@ Restart after editing `cameras.json`:
 sudo systemctl restart store-counter.service
 ```
 
-## Google Drive note
+## Apps Script Sync
 
 Linux does not have the same official Google Drive desktop sync client as
-Windows. Use `rclone`, direct API upload, or keep a Windows merger PC if Drive
-sync remains part of deployment.
+Windows. The app can instead mirror entries and health reports directly to the
+central Google Apps Script endpoint while still keeping local CSV exports.
+
+Create a local config file:
+
+```bash
+cd ~/store_counter_system
+cp cloud_config.example.json cloud_config.json
+nano cloud_config.json
+```
+
+Set `appscript_secret` to the same secret configured in `Code.gs`, then restart
+the app. The terminal should show:
+
+```text
+[cloud] Apps Script sync enabled -> https://script.google.com/...
+```

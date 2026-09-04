@@ -1,26 +1,19 @@
-"""Lightweight, dependency-free cloud sync for store entrance events.
+"""Background upload of store events and health reports to Google Apps Script.
 
-Pushes each entry/exit event to a Supabase (hosted Postgres) table over its REST
-API so counts can be read from anywhere. Designed for real-store deployment:
+Local CSV files remain the source of truth. This module only mirrors rows to a
+central Apps Script endpoint when configured, and it never blocks the camera loop.
 
-  * Sending happens on a background daemon thread via a bounded queue, so a slow
-    or down internet connection never blocks or crashes the camera/detection loop.
-  * If the cloud is not configured, every call is a no-op and the app runs as before.
-  * Failed sends are retried with backoff; the local CSV remains the source of truth.
+Configuration can be provided with environment variables:
 
-Configuration (either works; env vars win over the file):
+  STORE_COUNTER_APPS_SCRIPT_URL
+  STORE_COUNTER_APPS_SCRIPT_SECRET
 
-  Environment variables:
-    STORE_COUNTER_SUPABASE_URL   e.g. https://abcdxyz.supabase.co
-    STORE_COUNTER_SUPABASE_KEY   the project's anon or service_role API key
-    STORE_COUNTER_SUPABASE_TABLE optional, defaults to "store_events"
+or with ``cloud_config.json`` next to this file:
 
-  Or a JSON file next to this script named cloud_config.json:
-    {
-      "supabase_url": "https://abcdxyz.supabase.co",
-      "supabase_key": "eyJhbGc...",
-      "table": "store_events"
-    }
+  {
+    "appscript_url": "https://script.google.com/macros/s/.../exec",
+    "appscript_secret": "shared-secret"
+  }
 """
 
 from __future__ import annotations
@@ -45,137 +38,122 @@ def _utc_now_iso() -> str:
 
 
 class CloudSync:
-    """Background uploader for store entrance events.
-
-    Use ``CloudSync.from_config()`` to build one, then call ``enqueue(event)``
-    from the detection loop and ``close()`` on shutdown.
-    """
+    """Asynchronous Apps Script uploader for entry and health rows."""
 
     def __init__(
         self,
         url: str | None,
-        key: str | None,
-        table: str = "store_events",
+        secret: str | None,
         max_queue: int = 5000,
-        timeout: float = 8.0,
+        timeout: float = 10.0,
         max_retries: int = 5,
     ) -> None:
-        self.table = table
+        self.url = (url or "").strip()
+        self.secret = (secret or "").strip()
         self.timeout = timeout
         self.max_retries = max_retries
-        self._endpoint = f"{url.rstrip('/')}/rest/v1/{table}" if url else None
-        self._key = key
-        self._enabled = bool(url and key)
+        self._enabled = bool(self.url and self.secret)
         self._queue: "queue.Queue[dict[str, Any] | None]" = queue.Queue(maxsize=max_queue)
         self._worker: threading.Thread | None = None
         self._dropped = 0
         self._sent = 0
         self._warned_full = False
 
-    # -- construction ---------------------------------------------------------
-
     @classmethod
     def from_config(cls, base_dir: str | Path | None = None) -> "CloudSync":
-        url = os.environ.get("STORE_COUNTER_SUPABASE_URL")
-        key = os.environ.get("STORE_COUNTER_SUPABASE_KEY")
-        table = os.environ.get("STORE_COUNTER_SUPABASE_TABLE", "store_events")
+        url = os.environ.get("STORE_COUNTER_APPS_SCRIPT_URL")
+        secret = os.environ.get("STORE_COUNTER_APPS_SCRIPT_SECRET")
 
-        if not (url and key):
-            cfg_path = Path(base_dir or Path(__file__).resolve().parent) / CONFIG_FILENAME
-            if cfg_path.exists():
-                try:
-                    data = json.loads(cfg_path.read_text(encoding="utf-8"))
-                    url = url or data.get("supabase_url")
-                    key = key or data.get("supabase_key")
-                    table = data.get("table", table)
-                except (json.JSONDecodeError, OSError) as exc:
-                    print(f"[cloud] Could not read {cfg_path.name}: {exc}", flush=True)
+        cfg_path = Path(base_dir or Path(__file__).resolve().parent) / CONFIG_FILENAME
+        if cfg_path.exists():
+            try:
+                data = json.loads(cfg_path.read_text(encoding="utf-8"))
+                url = url or data.get("appscript_url") or data.get("url")
+                secret = secret or data.get("appscript_secret") or data.get("secret")
+            except (json.JSONDecodeError, OSError) as exc:
+                print(f"[cloud] Could not read {cfg_path.name}: {exc}", flush=True)
 
-        return cls(url=url, key=key, table=table)
-
-    # -- lifecycle ------------------------------------------------------------
-
-    def start(self) -> None:
-        if not self._enabled:
-            print(
-                "[cloud] Cloud sync disabled (no Supabase URL/key configured). "
-                "Events are saved to the local CSV only.",
-                flush=True,
-            )
-            return
-        self._worker = threading.Thread(target=self._run, name="cloud-sync", daemon=True)
-        self._worker.start()
-        print(f"[cloud] Cloud sync enabled -> {self._endpoint}", flush=True)
+        return cls(url=url, secret=secret)
 
     @property
     def enabled(self) -> bool:
         return self._enabled
 
-    def enqueue(self, event: dict[str, Any]) -> None:
-        """Queue an event for upload. Never blocks; drops if the queue is full."""
+    def start(self) -> None:
+        if not self._enabled:
+            print(
+                "[cloud] Apps Script sync disabled. Set cloud_config.json or "
+                "STORE_COUNTER_APPS_SCRIPT_URL/SECRET to enable it.",
+                flush=True,
+            )
+            return
+        self._worker = threading.Thread(target=self._run, name="appscript-sync", daemon=True)
+        self._worker.start()
+        print(f"[cloud] Apps Script sync enabled -> {self.url}", flush=True)
+
+    def enqueue_entry(self, row: dict[str, Any]) -> None:
+        payload = dict(row)
+        payload["type"] = "entry"
+        self.enqueue(payload)
+
+    def enqueue_health(self, row: dict[str, Any]) -> None:
+        payload = dict(row)
+        payload["type"] = "health"
+        self.enqueue(payload)
+
+    def enqueue(self, payload: dict[str, Any]) -> None:
         if not self._enabled:
             return
-        if "event_time" not in event:
-            event["event_time"] = _utc_now_iso()
+        payload.setdefault("sent_at", _utc_now_iso())
+        payload["secret"] = self.secret
         try:
-            self._queue.put_nowait(event)
+            self._queue.put_nowait(payload)
         except queue.Full:
             self._dropped += 1
             if not self._warned_full:
                 self._warned_full = True
-                print(
-                    "[cloud] Upload queue full (internet down for a while?). "
-                    "Dropping newest events; the local CSV still has everything.",
-                    flush=True,
-                )
+                print("[cloud] Upload queue full. Local CSVs are still being written.", flush=True)
 
     def close(self, drain_seconds: float = 5.0) -> None:
         if not self._enabled or self._worker is None:
             return
         self._queue.put(None)
         self._worker.join(timeout=drain_seconds)
-        print(f"[cloud] Cloud sync stopped. sent={self._sent} dropped={self._dropped}", flush=True)
-
-    # -- worker ---------------------------------------------------------------
+        print(f"[cloud] Apps Script sync stopped. sent={self._sent} dropped={self._dropped}", flush=True)
 
     def _run(self) -> None:
         while True:
-            event = self._queue.get()
-            if event is None:
+            payload = self._queue.get()
+            if payload is None:
                 return
-            self._send_with_retry(event)
+            self._send_with_retry(payload)
             if self._warned_full and self._queue.qsize() == 0:
                 self._warned_full = False
 
-    def _send_with_retry(self, event: dict[str, Any]) -> None:
-        body = json.dumps([event]).encode("utf-8")
-        headers = {
-            "Content-Type": "application/json",
-            "apikey": self._key,
-            "Authorization": f"Bearer {self._key}",
-            "Prefer": "return=minimal",
-        }
+    def _send_with_retry(self, payload: dict[str, Any]) -> None:
+        body = json.dumps(payload).encode("utf-8")
+        headers = {"Content-Type": "application/json"}
         delay = 1.0
         for attempt in range(1, self.max_retries + 1):
             try:
-                req = urllib.request.Request(self._endpoint, data=body, headers=headers, method="POST")
+                req = urllib.request.Request(self.url, data=body, headers=headers, method="POST")
                 with urllib.request.urlopen(req, timeout=self.timeout) as resp:
-                    if 200 <= resp.status < 300:
+                    text = resp.read().decode("utf-8", "replace")[:300]
+                    compact = text.replace(" ", "").lower()
+                    if 200 <= resp.status < 300 and '"ok":true' in compact:
                         self._sent += 1
                         return
-                    print(f"[cloud] Unexpected status {resp.status} sending event.", flush=True)
+                    print(f"[cloud] Unexpected Apps Script response HTTP {resp.status}: {text}", flush=True)
                     return
             except urllib.error.HTTPError as exc:
-                # 4xx are config/schema errors that won't fix themselves on retry.
-                detail = exc.read().decode("utf-8", "replace")[:200] if exc.fp else ""
+                detail = exc.read().decode("utf-8", "replace")[:300] if exc.fp else ""
                 if 400 <= exc.code < 500:
-                    print(f"[cloud] Rejected (HTTP {exc.code}): {detail}. Check table/keys.", flush=True)
+                    print(f"[cloud] Apps Script rejected HTTP {exc.code}: {detail}", flush=True)
                     return
-                print(f"[cloud] Server error HTTP {exc.code} (attempt {attempt}/{self.max_retries}).", flush=True)
+                print(f"[cloud] Apps Script server error HTTP {exc.code} attempt {attempt}/{self.max_retries}", flush=True)
             except (urllib.error.URLError, TimeoutError, OSError) as exc:
-                # Network down / DNS / timeout -> retry with backoff.
                 if attempt == self.max_retries:
-                    print(f"[cloud] Giving up on event after {attempt} attempts: {exc}", flush=True)
+                    print(f"[cloud] Giving up after {attempt} upload attempts: {exc}", flush=True)
             if attempt < self.max_retries:
                 time.sleep(min(delay, 30.0))
                 delay *= 2

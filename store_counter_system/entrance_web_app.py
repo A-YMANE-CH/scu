@@ -18,6 +18,7 @@ import cv2
 import numpy as np
 import psutil
 
+from cloud_sync import CloudSync
 from entrance_people_detector import (
     DEFAULT_GEOMETRIES,
     EntranceGeometry,
@@ -75,6 +76,7 @@ class EntranceAppState:
     selected_store_id: str = "store_1"
     stores: list[dict[str, Any]] = field(default_factory=list)
     config_path: Path = Path("outputs/config/entrance_geometry.json")
+    cloud_sync: CloudSync | None = None
 
 
 def geometry_to_payload(geometry: EntranceGeometry) -> dict[str, Any]:
@@ -431,6 +433,22 @@ def write_health_report(state: EntranceAppState, args: argparse.Namespace, proc:
         writer = csv.DictWriter(file, fieldnames=HEALTH_FIELDNAMES)
         writer.writeheader()
         writer.writerows(rows)
+    if state.cloud_sync is not None and current["row_type"] == "recent":
+        state.cloud_sync.enqueue_health(
+            {
+                "store_id": current["store_id"],
+                "store_name": current["store_name"],
+                "pc_name": current["pc_name"],
+                "reported_at": current["reported_at"],
+                "status": current["status"],
+                "avg_fps": current["avg_fps"],
+                "min_fps": current["min_fps"],
+                "cpu_percent": current["cpu_percent"],
+                "ram_percent": current["ram_percent"],
+                "camera_ok": current["cameras_running"] == current["cameras_total"],
+                "message": current["message"],
+            }
+        )
 
 
 def health_monitor_worker(state: EntranceAppState, args: argparse.Namespace, csv_lock: threading.Lock) -> None:
@@ -456,7 +474,7 @@ def health_monitor_worker(state: EntranceAppState, args: argparse.Namespace, csv
         time.sleep(max(5.0, float(args.health_interval_seconds)))
 
 
-def write_store_entry_exports(state: EntranceAppState, camera_id: str, entry_count: int, args: argparse.Namespace) -> None:
+def write_store_entry_exports(state: EntranceAppState, camera_id: str, entry_count: int, tracker_id: int, args: argparse.Namespace) -> None:
     now = time.localtime()
     with state.lock:
         store = selected_store(state, camera_id)
@@ -479,6 +497,20 @@ def write_store_entry_exports(state: EntranceAppState, camera_id: str, entry_cou
             "number": int(entry_count),
         },
     )
+    if state.cloud_sync is not None:
+        state.cloud_sync.enqueue_entry(
+            {
+                "store_id": store_id,
+                "store_name": store_name,
+                "pc_name": os.environ.get("COMPUTERNAME") or os.environ.get("HOSTNAME") or "",
+                "event_time": f"{central_row['date']}T{central_row['time']}",
+                "direction": "entry",
+                "camera_id": camera_id,
+                "track_id": int(tracker_id),
+                "count_in": int(entry_count),
+                "count_out": "",
+            }
+        )
 
 
 def record_crossing_event(
@@ -525,7 +557,7 @@ def record_crossing_event(
         events_file.flush()
     if direction == "entry":
         with csv_lock:
-            write_store_entry_exports(state, camera.camera_id, camera.entry_count, args)
+            write_store_entry_exports(state, camera.camera_id, camera.entry_count, tracker_id, args)
     if args.print_events:
         label = direction.upper()
         print(
@@ -1654,6 +1686,8 @@ def run(args: argparse.Namespace) -> None:
         sales_count=saved_sales_count,
         config_path=config_path,
     )
+    state.cloud_sync = CloudSync.from_config(resolve_project_path("."))
+    state.cloud_sync.start()
     for camera_id in args.camera_ids:
         if camera_id not in geometries:
             raise SystemExit(f"No default geometry for {camera_id}")
@@ -1725,6 +1759,8 @@ def run(args: argparse.Namespace) -> None:
             state.stop = True
             for thread in threads:
                 thread.join(timeout=2.0)
+            if state.cloud_sync is not None:
+                state.cloud_sync.close()
             events_file.close()
             tracks_file.close()
         return
@@ -1738,6 +1774,8 @@ def run(args: argparse.Namespace) -> None:
         server.server_close()
         for thread in threads:
             thread.join(timeout=2.0)
+        if state.cloud_sync is not None:
+            state.cloud_sync.close()
         events_file.close()
         tracks_file.close()
         for thread in threads:
